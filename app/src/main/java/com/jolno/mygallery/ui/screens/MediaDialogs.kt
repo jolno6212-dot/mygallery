@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -29,6 +30,7 @@ import com.jolno.mygallery.data.MediaItem
 import com.jolno.mygallery.data.SortField
 import com.jolno.mygallery.data.SortOption
 import com.jolno.mygallery.data.SortOrder
+import com.jolno.mygallery.data.UpdateInfo
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -267,6 +269,39 @@ fun AboutDialog(onDismiss: () -> Unit) {
         },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("閉じる") }
+        }
+    )
+}
+
+@Composable
+fun UpdateAvailableDialog(
+    info: UpdateInfo,
+    downloading: Boolean,
+    onDismiss: () -> Unit,
+    onUpdate: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { if (!downloading) onDismiss() },
+        title = { Text("アップデートがあります") },
+        text = {
+            Column {
+                Text("新しいバージョン: ${info.versionName}")
+                if (downloading) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 8.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.padding(end = 8.dp))
+                        Text("ダウンロード中…")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onUpdate, enabled = !downloading) { Text("更新") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !downloading) { Text("後で") }
         }
     )
 }

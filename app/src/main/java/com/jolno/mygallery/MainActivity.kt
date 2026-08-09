@@ -3,6 +3,7 @@ package com.jolno.mygallery
 import android.Manifest
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.BackHandler
@@ -28,15 +29,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.core.content.ContextCompat
 import com.jolno.mygallery.data.AppSettingsStore
 import com.jolno.mygallery.data.MediaFolder
 import com.jolno.mygallery.data.MediaItem
 import com.jolno.mygallery.data.MediaRepository
+import com.jolno.mygallery.data.UpdateInfo
+import com.jolno.mygallery.data.canRequestPackageInstalls
+import com.jolno.mygallery.data.checkForUpdate
+import com.jolno.mygallery.data.downloadUpdate
+import com.jolno.mygallery.data.installUpdate
+import com.jolno.mygallery.data.requestInstallPermission
 import com.jolno.mygallery.ui.screens.FolderListScreen
 import com.jolno.mygallery.ui.screens.MediaGridScreen
 import com.jolno.mygallery.ui.screens.MediaViewerScreen
+import com.jolno.mygallery.ui.screens.UpdateAvailableDialog
 import com.jolno.mygallery.ui.theme.MyGalleryTheme
+import kotlinx.coroutines.launch
 
 private sealed class ViewerOrigin {
     data object AllMedia : ViewerOrigin()
@@ -111,6 +121,23 @@ private fun GalleryApp() {
         }
     }
 
+    var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
+    var updateDownloading by remember { mutableStateOf(false) }
+    val updateScope = rememberCoroutineScope()
+
+    fun performUpdateCheck(manual: Boolean) {
+        updateScope.launch {
+            val result = checkForUpdate()
+            if (result != null) {
+                updateInfo = result
+            } else if (manual) {
+                Toast.makeText(context, "最新バージョンです", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) { performUpdateCheck(manual = false) }
+
     fun backTargetFor(origin: ViewerOrigin): Screen = when (origin) {
         ViewerOrigin.AllMedia -> Screen.Folders
         is ViewerOrigin.Folder -> Screen.Grid(origin.folder)
@@ -123,7 +150,8 @@ private fun GalleryApp() {
             onFolderClick = { folder -> screen = Screen.Grid(folder) },
             onMediaItemClick = { items, index ->
                 screen = Screen.Viewer(ViewerOrigin.AllMedia, items, index)
-            }
+            },
+            onCheckUpdate = { performUpdateCheck(manual = true) }
         )
         is Screen.Grid -> {
             BackHandler { screen = Screen.Folders }
@@ -151,6 +179,31 @@ private fun GalleryApp() {
                 onBack = { screen = backTarget }
             )
         }
+    }
+
+    updateInfo?.let { info ->
+        UpdateAvailableDialog(
+            info = info,
+            downloading = updateDownloading,
+            onDismiss = { updateInfo = null },
+            onUpdate = {
+                if (!canRequestPackageInstalls(context)) {
+                    requestInstallPermission(context)
+                    return@UpdateAvailableDialog
+                }
+                updateDownloading = true
+                updateScope.launch {
+                    val file = downloadUpdate(context, info)
+                    updateDownloading = false
+                    if (file != null) {
+                        installUpdate(context, file)
+                        updateInfo = null
+                    } else {
+                        Toast.makeText(context, "ダウンロードに失敗しました", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        )
     }
 }
 

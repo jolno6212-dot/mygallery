@@ -97,7 +97,8 @@ fun FolderListScreen(
     showAllMedia: Boolean,
     onToggleAllMedia: () -> Unit,
     onFolderClick: (MediaFolder) -> Unit,
-    onMediaItemClick: (List<MediaItem>, Int) -> Unit
+    onMediaItemClick: (List<MediaItem>, Int) -> Unit,
+    onCheckUpdate: () -> Unit
 ) {
     val context = LocalContext.current
     val repository = remember { MediaRepository(context) }
@@ -307,6 +308,10 @@ fun FolderListScreen(
                                 DropdownMenuItem(text = { Text("このアプリについて") }, onClick = {
                                     showMenu = false
                                     dialogAction = FolderMenuAction.ABOUT
+                                })
+                                DropdownMenuItem(text = { Text("アップデートを確認") }, onClick = {
+                                    showMenu = false
+                                    onCheckUpdate()
                                 })
                             }
                         }
