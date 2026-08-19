@@ -2,10 +2,26 @@ package com.jolno.mygallery.data
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.widget.Toast
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
+
+fun requestManageExternalStoragePermission(context: Context) {
+    val intent = Intent(
+        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+        Uri.parse("package:${context.packageName}")
+    )
+    runCatching {
+        context.startActivity(intent)
+    }.onFailure {
+        runCatching {
+            context.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        }
+    }
+}
 
 fun openCamera(context: Context) {
     val intent = Intent("android.media.action.STILL_IMAGE_CAMERA")

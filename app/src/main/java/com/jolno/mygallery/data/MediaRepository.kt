@@ -8,9 +8,11 @@ import android.content.IntentSender
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
 import androidx.exifinterface.media.ExifInterface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -21,8 +23,15 @@ import java.util.Locale
 sealed class WriteResult {
     data object Success : WriteResult()
     data class NeedsPermission(val intentSender: IntentSender) : WriteResult()
+    /** 標準の写真フォルダ以外(例: 独自トップレベルフォルダ)への移動には「すべてのファイルへのアクセス」権限が必要。 */
+    data object NeedsFullFileAccess : WriteResult()
     data object Failed : WriteResult()
 }
+
+private val STANDARD_MEDIA_DIRECTORIES = setOf("DCIM", "Pictures", "Movies", "Download", "Documents")
+
+fun hasManageExternalStoragePermission(): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
 
 class MediaRepository(private val context: Context) {
 
@@ -129,6 +138,52 @@ class MediaRepository(private val context: Context) {
         return result
     }
 
+    /**
+     * RELATIVE_PATHを書き換えることで、コピー&削除ではなく実際のファイル移動を行う。
+     * MediaStoreは「DCIM」「Pictures」「Movies」「Download」「Documents」以外の
+     * 独自トップレベルフォルダへの書き込みを一切許可しないため、そのようなフォルダが
+     * 移動先の場合は「すべてのファイルへのアクセス」権限がある時のみファイルシステムを
+     * 直接操作して移動する。権限がなければNeedsFullFileAccessを返す。
+     */
+    suspend fun moveItem(item: MediaItem, targetFolder: MediaFolder): WriteResult = withContext(Dispatchers.IO) {
+        val primaryDir = targetFolder.relativePath.trimStart('/').substringBefore('/')
+        if (primaryDir !in STANDARD_MEDIA_DIRECTORIES) {
+            if (!hasManageExternalStoragePermission()) return@withContext WriteResult.NeedsFullFileAccess
+            return@withContext guardedWrite {
+                if (!moveViaFileSystem(item, targetFolder)) error("filesystem move failed")
+            }
+        }
+        guardedWrite {
+            val collectionUri = if (primaryDir.equals("Download", ignoreCase = true) ||
+                primaryDir.equals("Documents", ignoreCase = true)
+            ) {
+                MediaStore.Files.getContentUri("external")
+            } else if (item.kind == MediaKind.VIDEO) {
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            } else {
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            }
+            val targetUri = ContentUris.withAppendedId(collectionUri, item.id)
+            val values = ContentValues().apply {
+                put(MediaStore.Files.FileColumns.RELATIVE_PATH, targetFolder.relativePath)
+            }
+            val updated = context.contentResolver.update(targetUri, values, null, null)
+            if (updated <= 0) error("update failed")
+        }
+    }
+
+    private fun moveViaFileSystem(item: MediaItem, targetFolder: MediaFolder): Boolean {
+        val root = Environment.getExternalStorageDirectory()
+        val source = File(root, item.relativePath + item.displayName)
+        val targetDir = File(root, targetFolder.relativePath).apply { mkdirs() }
+        val target = File(targetDir, item.displayName)
+        val moved = source.renameTo(target)
+        if (moved) {
+            MediaScannerConnection.scanFile(context, arrayOf(source.absolutePath, target.absolutePath), null, null)
+        }
+        return moved
+    }
+
     /** API 30+: 削除の確認をユーザーに求めるためのIntentSenderを返す。API29以下ではnull。 */
     fun createDeleteRequest(items: List<MediaItem>): IntentSender? {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -156,6 +211,7 @@ class MediaRepository(private val context: Context) {
         } catch (e: RecoverableSecurityException) {
             WriteResult.NeedsPermission(e.userAction.actionIntent.intentSender)
         } catch (e: Exception) {
+            Log.e("MediaRepository", "write failed", e)
             WriteResult.Failed
         }
     }
@@ -228,11 +284,11 @@ class MediaRepository(private val context: Context) {
                 put(MediaStore.Files.FileColumns.RELATIVE_PATH, targetFolder.relativePath)
                 put(MediaStore.Files.FileColumns.MIME_TYPE, context.contentResolver.getType(item.uri))
             }
-            val contentUri = if (item.kind == MediaKind.VIDEO) {
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-            } else {
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-            }
+            // Images/Video/Downloadsの各コレクションは挿入先のプライマリディレクトリが
+            // DCIM/Pictures/Movies/Downloadなどに固定されており、「se」のような独自の
+            // トップレベルフォルダへ挿入するとIllegalArgumentExceptionになる。
+            // 汎用のFilesコレクションはこの制限を受けないため、どのフォルダにも挿入できる。
+            val contentUri = MediaStore.Files.getContentUri("external")
             val newUri = context.contentResolver.insert(contentUri, values) ?: error("insert failed")
             context.contentResolver.openInputStream(item.uri)?.use { input ->
                 context.contentResolver.openOutputStream(newUri)?.use { output ->
@@ -240,12 +296,6 @@ class MediaRepository(private val context: Context) {
                 }
             }
         }
-    }
-
-    suspend fun moveItem(item: MediaItem, targetFolder: MediaFolder): WriteResult {
-        val copyResult = copyItem(item, targetFolder)
-        if (copyResult !is WriteResult.Success) return copyResult
-        return deleteDirectly(listOf(item))
     }
 
     /** フォルダを非表示にする(.nomedia ファイルを MediaStore 経由で作成)。 */

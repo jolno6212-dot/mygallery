@@ -71,6 +71,7 @@ import com.jolno.mygallery.data.WriteResult
 import com.jolno.mygallery.data.createShortcut
 import com.jolno.mygallery.data.editWithOtherApp
 import com.jolno.mygallery.data.openWithOtherApp
+import com.jolno.mygallery.data.requestManageExternalStoragePermission
 import com.jolno.mygallery.data.shareItems
 import com.jolno.mygallery.data.useAsOtherApp
 import kotlinx.coroutines.launch
@@ -114,6 +115,7 @@ fun MediaViewerScreen(
     var dialogState by remember { mutableStateOf<ViewerDialogState?>(null) }
     var folderList by remember { mutableStateOf<List<MediaFolder>>(emptyList()) }
     var pendingRetry by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var pendingMoveTarget by remember { mutableStateOf<MediaFolder?>(null) }
     var favoriteVersion by remember { mutableStateOf(0) }
 
     val currentItem = items.getOrNull(pagerState.currentPage)
@@ -136,6 +138,10 @@ fun MediaViewerScreen(
                     pendingRetry = { performWrite(operation, onSuccess) }
                     writePermissionLauncher.launch(IntentSenderRequest.Builder(result.intentSender).build())
                 }
+                is WriteResult.NeedsFullFileAccess -> {
+                    Toast.makeText(context, "このフォルダへの移動には「すべてのファイルへのアクセス」の許可が必要です", Toast.LENGTH_LONG).show()
+                    requestManageExternalStoragePermission(context)
+                }
                 is WriteResult.Failed -> Toast.makeText(context, "操作に失敗しました", Toast.LENGTH_SHORT).show()
             }
         }
@@ -157,6 +163,13 @@ fun MediaViewerScreen(
                 repository.deleteDirectly(listOf(target))
                 onBack()
             }
+        }
+    }
+
+    fun moveCurrentTo(target: MediaFolder) {
+        val item = currentItem ?: return
+        performWrite({ repository.moveItem(item, target) }) {
+            Toast.makeText(context, "移動しました", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -355,12 +368,7 @@ fun MediaViewerScreen(
                 onDismiss = { dialogState = null },
                 onSelected = { target ->
                     dialogState = null
-                    currentItem?.let { item ->
-                        scope.launch {
-                            repository.moveItem(item, target)
-                            onBack()
-                        }
-                    }
+                    pendingMoveTarget = target
                 }
             )
         }
@@ -389,6 +397,18 @@ fun MediaViewerScreen(
             )
         }
         null -> {}
+    }
+
+    pendingMoveTarget?.let { target ->
+        ConfirmDialog(
+            title = "移動",
+            message = "「${target.name}」に移動しますか?",
+            onDismiss = { pendingMoveTarget = null },
+            onConfirm = {
+                pendingMoveTarget = null
+                moveCurrentTo(target)
+            }
+        )
     }
 }
 

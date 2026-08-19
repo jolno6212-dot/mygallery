@@ -83,6 +83,7 @@ import com.jolno.mygallery.data.editWithOtherApp
 import com.jolno.mygallery.data.openCamera
 import com.jolno.mygallery.data.openWithOtherApp
 import com.jolno.mygallery.data.playVideoExternally
+import com.jolno.mygallery.data.requestManageExternalStoragePermission
 import com.jolno.mygallery.data.shareItems
 import com.jolno.mygallery.data.sortedFoldersBy
 import com.jolno.mygallery.data.sortedItemsBy
@@ -120,6 +121,7 @@ fun FolderListScreen(
     var selectionDialogState by remember { mutableStateOf<DialogState?>(null) }
     var folderList by remember { mutableStateOf<List<MediaFolder>>(emptyList()) }
     var pendingRetry by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var pendingMoveTarget by remember { mutableStateOf<MediaFolder?>(null) }
     val gridState = rememberLazyGridState()
 
     fun refreshAllItems() {
@@ -156,6 +158,10 @@ fun FolderListScreen(
                     pendingRetry = { performWrite(operation, onSuccess) }
                     writePermissionLauncher.launch(IntentSenderRequest.Builder(result.intentSender).build())
                 }
+                is WriteResult.NeedsFullFileAccess -> {
+                    Toast.makeText(context, "このフォルダへの移動には「すべてのファイルへのアクセス」の許可が必要です", Toast.LENGTH_LONG).show()
+                    requestManageExternalStoragePermission(context)
+                }
                 is WriteResult.Failed -> Toast.makeText(context, "操作に失敗しました", Toast.LENGTH_SHORT).show()
             }
         }
@@ -182,6 +188,15 @@ fun FolderListScreen(
                 refreshAllItems()
             }
         }
+    }
+
+    fun moveSelectedTo(target: MediaFolder) {
+        selectedMediaItems().forEach { item ->
+            performWrite({ repository.moveItem(item, target) }) {}
+        }
+        selectedIds = emptySet()
+        refreshAllItems()
+        Toast.makeText(context, "移動しました", Toast.LENGTH_SHORT).show()
     }
 
     Scaffold(
@@ -518,13 +533,7 @@ fun FolderListScreen(
                 onDismiss = { selectionDialogState = null },
                 onSelected = { target ->
                     selectionDialogState = null
-                    val targets = selectedMediaItems()
-                    scope.launch {
-                        targets.forEach { item -> repository.moveItem(item, target) }
-                        selectedIds = emptySet()
-                        refreshAllItems()
-                        Toast.makeText(context, "移動しました", Toast.LENGTH_SHORT).show()
-                    }
+                    pendingMoveTarget = target
                 }
             )
         }
@@ -556,6 +565,18 @@ fun FolderListScreen(
         }
         null -> {}
         else -> {}
+    }
+
+    pendingMoveTarget?.let { target ->
+        ConfirmDialog(
+            title = "移動",
+            message = "選択した項目を「${target.name}」に移動しますか?",
+            onDismiss = { pendingMoveTarget = null },
+            onConfirm = {
+                pendingMoveTarget = null
+                moveSelectedTo(target)
+            }
+        )
     }
 }
 

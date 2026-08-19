@@ -68,6 +68,7 @@ import com.jolno.mygallery.data.createShortcut
 import com.jolno.mygallery.data.editWithOtherApp
 import com.jolno.mygallery.data.openWithOtherApp
 import com.jolno.mygallery.data.playVideoExternally
+import com.jolno.mygallery.data.requestManageExternalStoragePermission
 import com.jolno.mygallery.data.shareItems
 import com.jolno.mygallery.data.sortedItemsBy
 import com.jolno.mygallery.data.useAsOtherApp
@@ -96,6 +97,7 @@ fun MediaGridScreen(
     var dialogState by remember { mutableStateOf<DialogState?>(null) }
     var folderList by remember { mutableStateOf<List<MediaFolder>>(emptyList()) }
     var pendingRetry by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var pendingMoveTarget by remember { mutableStateOf<MediaFolder?>(null) }
     var columns by remember { mutableStateOf(settingsStore.gridColumns) }
     var sortOption by remember { mutableStateOf(settingsStore.sortOption) }
     var searchQuery by remember { mutableStateOf("") }
@@ -127,6 +129,10 @@ fun MediaGridScreen(
                     pendingRetry = { performWrite(operation, onSuccess) }
                     writePermissionLauncher.launch(IntentSenderRequest.Builder(result.intentSender).build())
                 }
+                is WriteResult.NeedsFullFileAccess -> {
+                    Toast.makeText(context, "このフォルダへの移動には「すべてのファイルへのアクセス」の許可が必要です", Toast.LENGTH_LONG).show()
+                    requestManageExternalStoragePermission(context)
+                }
                 is WriteResult.Failed -> Toast.makeText(context, "操作に失敗しました", Toast.LENGTH_SHORT).show()
             }
         }
@@ -155,6 +161,15 @@ fun MediaGridScreen(
                 refresh()
             }
         }
+    }
+
+    fun moveSelectedTo(target: MediaFolder) {
+        selectedItems().forEach { item ->
+            performWrite({ repository.moveItem(item, target) }) {}
+        }
+        selectedIds = emptySet()
+        refresh()
+        Toast.makeText(context, "移動しました", Toast.LENGTH_SHORT).show()
     }
 
     Scaffold(
@@ -454,13 +469,7 @@ fun MediaGridScreen(
                 onDismiss = { dialogState = null },
                 onSelected = { target ->
                     dialogState = null
-                    val targets = selectedItems()
-                    scope.launch {
-                        targets.forEach { item -> repository.moveItem(item, target) }
-                        selectedIds = emptySet()
-                        refresh()
-                        Toast.makeText(context, "移動しました", Toast.LENGTH_SHORT).show()
-                    }
+                    pendingMoveTarget = target
                 }
             )
         }
@@ -513,6 +522,18 @@ fun MediaGridScreen(
             )
         }
         null -> {}
+    }
+
+    pendingMoveTarget?.let { target ->
+        ConfirmDialog(
+            title = "移動",
+            message = "選択した項目を「${target.name}」に移動しますか?",
+            onDismiss = { pendingMoveTarget = null },
+            onConfirm = {
+                pendingMoveTarget = null
+                moveSelectedTo(target)
+            }
+        )
     }
 }
 
